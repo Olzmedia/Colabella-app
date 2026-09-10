@@ -1,0 +1,65 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Descomprimir el proyecto
+        run: |
+          ZIP=$(find . -name '*.zip' -not -path './.git/*' | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: no hay ningun .zip en el repositorio."
+            find . -path ./.git -prune -o -print | head -40
+            exit 1
+          fi
+          echo "Usando: $ZIP"
+          mkdir -p src
+          unzip -oq "$ZIP" -d src
+
+      - name: Localizar el proyecto
+        id: find
+        run: |
+          FILE=$(find src -name settings.gradle | head -1)
+          if [ -z "$FILE" ]; then
+            echo "ERROR: el zip no contiene settings.gradle."
+            find src | head -40
+            exit 1
+          fi
+          DIR=$(dirname "$FILE")
+          echo "Proyecto en: $DIR"
+          echo "--- Archivos del modulo app ---"
+          ls -la "$DIR/app"
+          echo "--- app/build.gradle ---"
+          cat "$DIR/app/build.gradle"
+          echo "dir=$DIR" >> $GITHUB_OUTPUT
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+          cache-disabled: true
+
+      - name: Compilar APK de debug
+        working-directory: ${{ steps.find.outputs.dir }}
+        run: gradle assembleDebug --no-daemon
+
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: colabella-petclub-debug
+          path: ${{ steps.find.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
