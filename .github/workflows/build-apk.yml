@@ -59,7 +59,14 @@ jobs:
 
       - name: Compilar APK de debug
         working-directory: ${{ steps.find.outputs.dir }}
-        run: gradle assembleDebug --no-daemon
+        run: |
+          set -o pipefail
+          if ! gradle assembleDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/assembleDebug.log"; then
+            # Publica el motivo del fallo como anotacion, visible en el resumen de la ejecucion
+            MSG=$( { grep -E "^(ERROR|e: )|error:" "$RUNNER_TEMP/assembleDebug.log" | head -15; grep -A 25 "What went wrong" "$RUNNER_TEMP/assembleDebug.log"; } | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Fallo al compilar el APK::$MSG"
+            exit 1
+          fi
 
       - name: Publicar APK
         uses: actions/upload-artifact@v4
@@ -83,7 +90,14 @@ jobs:
           COLABELLA_KEYSTORE_PASSWORD: ${{ secrets.COLABELLA_KEYSTORE_PASSWORD }}
           COLABELLA_KEY_ALIAS: ${{ secrets.COLABELLA_KEY_ALIAS }}
           COLABELLA_KEY_PASSWORD: ${{ secrets.COLABELLA_KEY_PASSWORD }}
-        run: gradle bundleRelease --no-daemon
+        run: |
+          set -o pipefail
+          if ! gradle bundleRelease --no-daemon 2>&1 | tee "$RUNNER_TEMP/bundleRelease.log"; then
+            # Publica el motivo del fallo como anotacion, visible en el resumen de la ejecucion
+            MSG=$( { grep -E "^(ERROR|e: )|error:" "$RUNNER_TEMP/bundleRelease.log" | head -15; grep -A 25 "What went wrong" "$RUNNER_TEMP/bundleRelease.log"; } | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Fallo al compilar el AAB::$MSG"
+            exit 1
+          fi
 
       - name: Publicar AAB para Google Play
         if: env.KEYSTORE_B64 != ''
