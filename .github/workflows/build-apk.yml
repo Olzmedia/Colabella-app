@@ -2,8 +2,12 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, diagnostico-webview ]
   workflow_dispatch:
+
+# contents: write -> para guardar el APK de prueba en la rama apk-prueba
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -68,30 +72,63 @@ jobs:
             exit 1
           fi
 
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: colabella-petclub-debug
+          # Un APK por procesador (GeckoView): app-arm64-v8a-debug.apk es el de casi todos
+          path: ${{ steps.find.outputs.dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      # Copia el APK de 64 bits en la rama apk-prueba: asi se puede bajar sin entrar
+      # a Actions (y descargarlo directo en el telefono desde GitHub).
+      - name: Guardar APK en la rama apk-prueba
+        if: github.ref_name != 'main' && github.ref_name != 'master'
+        working-directory: ${{ steps.find.outputs.dir }}
+        run: |
+          APK=app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          [ -f "$APK" ] || APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          mkdir -p "$RUNNER_TEMP/apk" && cp "$APK" "$RUNNER_TEMP/apk/colabella-prueba.apk"
+          cd "$RUNNER_TEMP/apk"
+          # GitHub no admite archivos de mas de 100 MB: el APK va en trozos de 45 MB.
+          # Para unirlo: cat colabella-prueba.apk.parte-* > colabella-prueba.apk
+          sha256sum colabella-prueba.apk > colabella-prueba.apk.sha256
+          split -b 45m colabella-prueba.apk colabella-prueba.apk.parte-
+          rm colabella-prueba.apk
+          git init -q -b apk-prueba
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          echo "APK de prueba de ${GITHUB_SHA} (rama ${GITHUB_REF_NAME}, ejecucion ${GITHUB_RUN_NUMBER})" > LEEME.txt
+          git add -A && git commit -qm "APK de prueba ${GITHUB_RUN_NUMBER}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" apk-prueba
+
+
       # Google Play rechaza apps con librerias nativas (.so) que no esten alineadas
       # a 16 KB. Las mete Firebase/AndroidX; este paso avisa si una actualizacion
       # de libreria rompe la alineacion, antes de llegar a Play Console.
       - name: Verificar compatibilidad con 16 KB
         working-directory: ${{ steps.find.outputs.dir }}
         run: |
-          python3 - app/build/outputs/apk/debug/app-debug.apk << 'PYEOF'
+          python3 - app/build/outputs/apk/debug/*.apk << 'PYEOF'
           import sys, zipfile, struct
-          z = zipfile.ZipFile(sys.argv[1]); malos = []; total = 0
-          for info in z.infolist():
-              if not info.filename.endswith('.so'):
-                  continue
-              data = z.read(info)
-              if data[:4] != b'\x7fELF' or data[4] != 2:
-                  continue  # solo cuentan las de 64 bits
-              total += 1
-              phoff = struct.unpack_from('<Q', data, 0x20)[0]
-              phentsize, phnum = struct.unpack_from('<HH', data, 0x36)
-              for i in range(phnum):
-                  off = phoff + i * phentsize
-                  if struct.unpack_from('<I', data, off)[0] == 1:
-                      if struct.unpack_from('<Q', data, off + 48)[0] < 16384:
-                          malos.append(info.filename)
-                          break
+          malos = []; total = 0
+          for apk in sys.argv[1:]:
+            z = zipfile.ZipFile(apk)
+            for info in z.infolist():
+                if not info.filename.endswith('.so'):
+                    continue
+                data = z.read(info)
+                if data[:4] != b'\x7fELF' or data[4] != 2:
+                    continue  # solo cuentan las de 64 bits
+                total += 1
+                phoff = struct.unpack_from('<Q', data, 0x20)[0]
+                phentsize, phnum = struct.unpack_from('<HH', data, 0x36)
+                for i in range(phnum):
+                    off = phoff + i * phentsize
+                    if struct.unpack_from('<I', data, off)[0] == 1:
+                        if struct.unpack_from('<Q', data, off + 48)[0] < 16384:
+                            malos.append(apk.split('/')[-1] + ': ' + info.filename)
+                            break
           print(f"Librerias nativas de 64 bits: {total}")
           if malos:
               for m in malos:
@@ -99,13 +136,6 @@ jobs:
               sys.exit(1)
           print("Todas compatibles con paginas de 16 KB")
           PYEOF
-
-      - name: Publicar APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: colabella-petclub-debug
-          path: ${{ steps.find.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
 
       # ---- Version para Google Play (AAB firmado) ----
       # Solo se ejecuta si el repositorio tiene los secretos del keystore (ver README).
