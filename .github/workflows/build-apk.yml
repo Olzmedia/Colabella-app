@@ -90,6 +90,11 @@ jobs:
           [ -f "$APK" ] || APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           mkdir -p "$RUNNER_TEMP/apk" && cp "$APK" "$RUNNER_TEMP/apk/colabella-prueba.apk"
           cd "$RUNNER_TEMP/apk"
+          # GitHub no admite archivos de mas de 100 MB: el APK va en trozos de 45 MB.
+          # Para unirlo: cat colabella-prueba.apk.parte-* > colabella-prueba.apk
+          sha256sum colabella-prueba.apk > colabella-prueba.apk.sha256
+          split -b 45m colabella-prueba.apk colabella-prueba.apk.parte-
+          rm colabella-prueba.apk
           git init -q -b apk-prueba
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
